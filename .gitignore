@@ -1,0 +1,7 @@
+*.zz
+*.bin
+*.ext2
+*.a
+cartesi-machine
+tasks.TODO
+emscripten-pty.js

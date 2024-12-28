@@ -1,0 +1,74 @@
+<!doctype html>
+<html>
+    <head>
+        <title>WebCM</title>
+        <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+        <link
+            rel="stylesheet"
+            href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css"
+        />
+        <style>
+            body {
+                margin: 0px;
+                padding: 0px;
+                background: #000;
+                overflow: hidden;
+            }
+            #terminal {
+                height: 100vh;
+                width: 100vw;
+                padding: 4px;
+                box-sizing: border-box;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="terminal"></div>
+        <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.18.0/lib/addon-webgl.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/xterm-pty@0.10.2/index.min.js"></script>
+        <script type="module">
+            // Create xterm.js terminal
+            const terminalElem = document.getElementById("terminal");
+            const xterm = new Terminal({
+                fontFamily: "monospace",
+                fontSize: 14,
+                fontWeight: 400,
+            });
+            xterm.open(terminalElem);
+            xterm.loadAddon(new WebglAddon.WebglAddon());
+            xterm.loadAddon(new WebLinksAddon.WebLinksAddon());
+            xterm.focus();
+
+            // Create master/slave objects
+            const { master, slave } = openpty();
+
+            // Configure terminal for raw mode
+            let termios = slave.ioctl("TCGETS");
+            termios.iflag &= ~0x5eb; // ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON)
+            termios.cflag &= ~0x130; // ~(CSIZE | PARENB)
+            termios.lflag &= ~0x804b; // ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN)
+            termios.cflag |= 0x30; // CS8
+            termios.oflag |= 0x1; // OPOST
+            slave.ioctl("TCSETS", termios);
+
+            // Connect the master object to xterm.js
+            xterm.loadAddon(master);
+
+            // Make the terminal's size and geometry fit the size of #terminal
+            const fitAddon = new FitAddon.FitAddon();
+            xterm.loadAddon(fitAddon);
+            fitAddon.fit();
+            new ResizeObserver(function () {
+                fitAddon.fit();
+            }).observe(terminalElem);
+
+            // Download and initialize the emscripten module
+            xterm.write("Downloading...\n\r");
+            import initEmscripten from "./webcm.mjs";
+            await initEmscripten({ pty: slave });
+        </script>
+    </body>
+</html>

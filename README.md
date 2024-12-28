@@ -1,4 +1,4 @@
-# Cartesi WASM Term
+# WebCM
 
 Cartesi Machine booting a full interactive Linux OS with RISC-V architecture in the browser:
 
