@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <time.h>
 
 #include "cartesi-machine/machine-c-api.h"
 #include <emscripten.h>
@@ -56,11 +57,12 @@ int main() {
     printf("Allocating...\n");
 
     // Set machine configuration
+    unsigned long long now = (unsigned long long)time(NULL);
     char config[4096];
     snprintf(config, sizeof(config), "{\
         \"dtb\": {\
             \"bootargs\": \"quiet earlycon=sbi console=hvc1 root=/dev/pmem0 rw init=/usr/sbin/cartesi-init\",\
-            \"init\": \"\",\
+            \"init\": \"date -s @%llu >> /dev/null\",\
             \"entrypoint\": \"exec ash -l\"\
         },\
         \"flash_drive\": [\
@@ -73,7 +75,7 @@ int main() {
             \"iunrep\": 1\
         },\
         \"ram\": {\"length\": %u}\
-    }", RAM_SIZE, ROOTFS_SIZE);
+    }", now, RAM_SIZE, ROOTFS_SIZE);
 
     // Create a new machine
     cm_machine *machine = NULL;
@@ -84,6 +86,7 @@ int main() {
 
     printf("Decompressing...\n");
 
+    // Decompress kernel and rootfs
     uncompress_memory(machine, RAM_START, linux_bin_zz, sizeof(linux_bin_zz));
     uncompress_memory(machine, ROOTFS_START, rootfs_ext2_zz, sizeof(rootfs_ext2_zz));
 

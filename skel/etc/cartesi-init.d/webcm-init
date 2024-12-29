@@ -6,31 +6,28 @@ blue() { echo -e '\e[1;34m' ; }
 reset() { echo -e '\e[0m' ; }
 clear
 cat <<EOF
-         .               $(red)${USER}@$(cat /etc/hostname)$(reset)
-        / \\              $(blue)os$(reset) Alpine Linux $(cat /etc/alpine-release)
-      /    \\             $(blue)arch$(reset) $(uname -m)
-\\---/---\\  /----\\        $(blue)isa$(reset) $(grep -o "rv.*" /proc/cpuinfo)
- \\       X       \\       $(blue)linux$(reset) $(uname -r)
-  \\----/  \\---/---\\      $(blue)emulator$(reset) Cartesi Machine $(cat /proc/device-tree/cartesi-machine/version)
-       \\    / CARTESI    $(blue)memory$(reset) $(free -m | awk '/Mem:/ { printf "%dMiB / %dMiB\n", $3, $2 }')
-        \\ /   MACHINE    $(blue)disk$(reset) $(df -h / | awk 'NR==2 {printf "%siB / %siB\n", $3, $2}')
-         '
-WebCM is a serverless interactive terminal running a virtual Alpine Linux
-directly in the browser by emulating a full RISC-V machine.
+         .             $(red)${USER}@$(cat /etc/hostname)$(reset)
+        / \\            $(blue)os$(reset) Alpine Linux $(cat /etc/alpine-release)
+      /    \\           $(blue)arch$(reset) $(uname -m)
+\\---/---\\  /----\\      $(blue)isa$(reset) $(grep -o "rv.*" /proc/cpuinfo)
+ \\       X       \\     $(blue)linux$(reset) $(uname -r)
+  \\----/  \\---/---\\    $(blue)emulator$(reset) Cartesi Machine $(cat /proc/device-tree/cartesi-machine/version)
+       \\    / CARTESI  $(blue)memory$(reset) $(free -m | awk '/Mem:/ { printf "%dMiB / %dMiB\n", $3, $2 }')
+        \\ /   MACHINE  $(blue)disk$(reset) $(df -h / | awk 'NR==2 {printf "%siB / %siB\n", $3, $2}')
+         '             $(blue)uptime$(reset) $(awk '{printf("%d secs\n", $1)}' /proc/uptime)
 
-It leverages the Cartesi Machine emulator compiled to WebAssembly,
-allowing the execution of RISC-V Linux applications in a sandboxed manner.
+WebCM is a serverless terminal that runs a virtual Linux
+directly in the browser by emulating a RISC-V machine.
 
-The system emulates the RV64GC instruction set architecture,
-with both privileged and unprivileged specifications,
-making it capable of running standard Linux distributions.
+It's powered by the Cartesi Machine emulator, which enables deterministic,
+verifiable and sandboxed execution of RV64GC Linux applications.
 
-As part of the Cartesi Machine's capabilities,
-it supports deterministic and verifiable computations.
+It's packaged as a single 24MiB WebAssembly file containing
+the emulator, the kernel and Alpine Linux operating system.
 
 Read more about it at $(link)https://github.com/cartesi/machine-emulator$(reset)
 
-Welcome! If unsure, try these examples:
+If unsure, try these examples:
 
     htop                                ncdu /
     duf                                 dmesg
