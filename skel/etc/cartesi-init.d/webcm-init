@@ -1,3 +1,4 @@
+#!/bin/sh
 export TERM=xterm-256color USER=root
 link() { echo -e '\e[1;34m\e[4m' ; }
 red() { echo -e '\e[1;31m' ; }

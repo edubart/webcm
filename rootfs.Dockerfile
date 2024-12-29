@@ -76,7 +76,7 @@ COPY --from=rootfs-stage / /rootfs
 RUN xgenext2fs \
     --faketime \
     --allow-holes \
-    --readjustment +$((64*1024*1024/4096)) \
+    --size-in-blocks $((128*1024*1024/4096)) \
     --block-size 4096 \
     --bytes-per-inode 4096 \
     --volume-label rootfs --root /rootfs /rootfs.ext2 && \

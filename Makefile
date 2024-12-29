@@ -1,21 +1,20 @@
-EMCC_CFLAGS=-Oz -g0 -Wall -Wextra \
+EMCC_CFLAGS=-Oz -g0 -std=c23 \
    	-L. -I. -lcartesi \
     --js-library=emscripten-pty.js \
-   	--embed-file linux.bin@linux.bin \
-   	--embed-file rootfs.ext2@rootfs.ext2 \
+    -Wall -Wextra -Wno-unused-function \
     -sASYNCIFY \
     -sFORCE_FILESYSTEM=1 \
    	-sSTACK_SIZE=4MB \
-   	-sTOTAL_MEMORY=512MB \
+   	-sTOTAL_MEMORY=384MB \
    	-sNO_DISABLE_EXCEPTION_CATCHING
 SKEL_FILES=$(shell find skel -type f)
 
-all: webcm.mjs linux.bin.zz rootfs.ext2.zz
+all: linux.bin.zz rootfs.ext2.zz webcm.mjs
 
 test: webcm.mjs
 	emrun index.html
 
-webcm.mjs: webcm.c libcartesi.a rootfs.ext2 linux.bin emscripten-pty.js
+webcm.mjs: webcm.c libcartesi.a rootfs.ext2.zz linux.bin.zz emscripten-pty.js
 	emcc webcm.c -o webcm.mjs $(EMCC_CFLAGS)
 
 rootfs.ext2: rootfs.Dockerfile $(SKEL_FILES)
