@@ -7,38 +7,34 @@ reset() { echo -e '\e[0m' ; }
 clear
 cat <<EOF
          .             $(red)${USER}@$(cat /etc/hostname)$(reset)
-        / \\            $(blue)os$(reset) Alpine Linux $(cat /etc/alpine-release)
-      /    \\           $(blue)arch$(reset) $(uname -m)
-\\---/---\\  /----\\      $(blue)isa$(reset) $(grep -o "rv.*" /proc/cpuinfo)
- \\       X       \\     $(blue)linux$(reset) $(uname -r)
-  \\----/  \\---/---\\    $(blue)emulator$(reset) Cartesi Machine $(cat /proc/device-tree/cartesi-machine/version)
-       \\    / CARTESI  $(blue)memory$(reset) $(free -m | awk '/Mem:/ { printf "%dMiB / %dMiB\n", $3, $2 }')
-        \\ /   MACHINE  $(blue)disk$(reset) $(df -h / | awk 'NR==2 {printf "%siB / %siB\n", $3, $2}')
-         '             $(blue)uptime$(reset) $(awk '{printf("%d secs\n", $1)}' /proc/uptime)
+        / \\            $(blue)os$(reset) Alpine $(cat /etc/alpine-release)
+      /    \\           $(blue)linux$(reset) $(uname -r)
+\\---/---\\  /----\\      $(blue)uptime$(reset) $(awk '{printf("%d secs\n", $1)}' /proc/uptime)
+ \\       X       \\     $(blue)mem$(reset) $(free -m | awk '/Mem:/ { printf "%dMiB / %dMiB\n", $3, $2 }')
+  \\----/  \\---/---\\    $(blue)disk$(reset) $(df -m / | awk 'NR==2 {printf "%dMiB / %dMiB\n", $3, $2}')
+       \\    / CARTESI  $(blue)emulator$(reset) $(cat /proc/device-tree/cartesi-machine/version)
+        \\ /   MACHINE  $(blue)arch$(reset) $(uname -m)
+         '             $(blue)isa$(reset) $(grep -o "rv.*" /proc/cpuinfo)
 
-WebCM is a serverless terminal that runs a virtual Linux
-directly in the browser by emulating a RISC-V machine.
+WebCM is a serverless terminal that runs a virtual Linux directly in the browser by emulating a RISC-V machine.
 
-It's powered by the Cartesi Machine emulator, which enables deterministic,
-verifiable and sandboxed execution of RV64GC Linux applications.
+It's powered by the Cartesi Machine emulator, which enables deterministic, verifiable and sandboxed execution of RV64GC Linux applications.
 
-It's packaged as a single 24MiB WebAssembly file containing
-the emulator, the kernel and Alpine Linux operating system.
+It's packaged as a single 24MiB WebAssembly file containing the emulator, the kernel and Alpine Linux operating system.
 
 Read more about it at $(link)https://github.com/cartesi/machine-emulator$(reset)
 
 If unsure, try these examples:
 
-    htop                                ncdu /
-    duf                                 dmesg
-    nvim                                vifm
-    bc                                  tmux
-    cmatrix                             sqlite3
-
-    lua hello.lua                       tmux-hello-lua
-    qjs hello.js                        tmux-hello-js
-    micropython hello.py                tmux-hello-py
-    mruby hello.rb                      tmux-hello-rb
-    tcc -run hello.c                    tmux-hello-c
+htop                    ncdu /
+duf                     dmesg
+nvim                    vifm
+bc                      tmux
+cmatrix                 sqlite3
+lua hello.lua           tmux-hello-lua
+qjs hello.js            tmux-hello-js
+micropython hello.py    tmux-hello-py
+mruby hello.rb          tmux-hello-rb
+tcc -run hello.c        tmux-hello-c
 
 EOF
