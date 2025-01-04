@@ -40,26 +40,31 @@
             href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css"
         />
         <style>
+            html {
+                height: 100%;
+            }
             body {
-                margin: 0px;
-                padding: 0px;
+                margin: 0;
+                height: 100%;
                 background: #000;
                 overflow: hidden;
             }
             #terminal {
-                height: 100vh;
-                width: 100vw;
+                height: 100%;
+                width: 100%;
                 padding: 4px;
                 box-sizing: border-box;
             }
         </style>
     </head>
     <body>
-        <div id="terminal"></div>
+        <div style="display: contents">
+            <div id="terminal"></div>
+        </div>
         <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
-        <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.18.0/lib/addon-webgl.min.js"></script>
+        <!-- <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.18.0/lib/addon-webgl.min.js"></script> -->
         <script src="https://cdn.jsdelivr.net/npm/xterm-pty@0.10.2/index.min.js"></script>
         <script type="module">
             // Create xterm.js terminal
@@ -70,7 +75,7 @@
                 fontWeight: 400,
             });
             xterm.open(terminalElem);
-            xterm.loadAddon(new WebglAddon.WebglAddon());
+            // xterm.loadAddon(new WebglAddon.WebglAddon());
             xterm.loadAddon(new WebLinksAddon.WebLinksAddon());
             xterm.focus();
 
