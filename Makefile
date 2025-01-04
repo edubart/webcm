@@ -14,6 +14,15 @@ all: linux.bin.zz rootfs.ext2.zz webcm.mjs
 test: webcm.mjs
 	emrun index.html
 
+shell: rootfs.ext2 linux.bin
+	cartesi-machine \
+		--ram-image=linux.bin \
+		--flash-drive=label:root,filename:rootfs.ext2 \
+		--no-init-splash \
+		--user=root \
+		--network \
+		-it "exec ash -l"
+
 webcm.mjs: webcm.c libcartesi.a rootfs.ext2.zz linux.bin.zz emscripten-pty.js
 	emcc webcm.c -o webcm.mjs $(EMCC_CFLAGS)
 
