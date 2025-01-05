@@ -1,12 +1,10 @@
-EMCC_CFLAGS=-Oz -g0 -std=c23 \
+EMCC_CFLAGS=-Oz -g0 -std=gnu23 \
    	-L. -I. -lcartesi \
     --js-library=emscripten-pty.js \
     -Wall -Wextra -Wno-unused-function \
     -sASYNCIFY \
-    -sFORCE_FILESYSTEM=1 \
    	-sSTACK_SIZE=4MB \
-   	-sTOTAL_MEMORY=384MB \
-   	-sNO_DISABLE_EXCEPTION_CATCHING
+   	-sTOTAL_MEMORY=384MB
 SKEL_FILES=$(shell find skel -type f)
 
 all: linux.bin.zz rootfs.ext2.zz webcm.mjs

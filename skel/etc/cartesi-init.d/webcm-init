@@ -22,7 +22,9 @@ It's powered by the Cartesi Machine emulator, which enables deterministic, verif
 
 It's packaged as a single 24MiB WebAssembly file containing the emulator, the kernel and Alpine Linux operating system.
 
-Read more about it at $(link)https://github.com/cartesi/machine-emulator$(reset)
+Read more about at:
+  $(link)https://github.com/edubart/webcm$(reset)
+  $(link)https://github.com/cartesi/machine-emulator$(reset)
 
 If unsure, try these examples:
 

@@ -16,7 +16,7 @@ Try it now by clicking on the image above.
 ## How it works?
 
 The Cartesi Machine emulator library was compiled to WASM using Emscripten toolchain.
-Then a simple C program instantiates a new Linux machine and boots in interactive terminak.
+Then a simple C program instantiates a new Linux machine and boots in interactive terminal.
 
 To have a terminal in the browser the following projects were used:
 
