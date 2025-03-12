@@ -35,7 +35,7 @@ rootfs.tar: rootfs.Dockerfile $(SKEL_FILES)
 	docker buildx build --progress plain --output type=tar,dest=$@ --file rootfs.Dockerfile .
 
 emscripten-pty.js:
-	wget -O emscripten-pty.js https://raw.githubusercontent.com/mame/xterm-pty/refs/tags/v0.10.1/emscripten-pty.js
+	wget -O emscripten-pty.js https://raw.githubusercontent.com/mame/xterm-pty/refs/heads/main/emscripten-pty.js
 
 linux.bin: ## Download linux.bin
 	wget -O linux.bin https://github.com/cartesi/machine-linux-image/releases/download/v0.20.0/linux-6.5.13-ctsi-1-v0.20.0.bin
