@@ -1,9 +1,3 @@
-## Host toolchain stage
-FROM cartesi/toolchain:0.17.0 AS host-tools-stage
-RUN apt-get update && \
-    apt-get install -y squashfs-tools && \
-    rm -rf /var/lib/apt
-
 ################################
 # Busybox stage
 FROM --platform=linux/riscv64 riscv64/busybox:1.37.0-musl AS busybox-stage
@@ -68,20 +62,3 @@ COPY skel /
 RUN rm -rf /var/cache/apk && \
     rm -f /usr/lib/*.a && \
     ln -sf lua5.4 /usr/bin/lua
-
-################################
-# Generate rootfs.ext2
-FROM host-tools-stage AS generate-rootfs-stage
-COPY --from=rootfs-stage / /rootfs
-RUN xgenext2fs \
-    --faketime \
-    --allow-holes \
-    --size-in-blocks $((128*1024*1024/4096)) \
-    --block-size 4096 \
-    --bytes-per-inode 4096 \
-    --volume-label rootfs --root /rootfs /rootfs.ext2 && \
-    rm -rf /rootfs
-
-################################
-FROM --platform=linux/riscv64 rootfs-stage AS rootfs-final-stage
-COPY --from=generate-rootfs-stage /rootfs.ext2 /rootfs.ext2

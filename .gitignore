@@ -1,7 +1,6 @@
 *.zz
 *.bin
 *.ext2
-*.a
-cartesi-machine
+*.tar
 tasks.TODO
 emscripten-pty.js

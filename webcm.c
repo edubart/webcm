@@ -134,7 +134,7 @@ int main() {
 
     // Read and print machine cycles
     uint64_t mcycle;
-    if (cm_read_mcycle(machine, &mcycle) != CM_ERROR_OK) {
+    if (cm_read_reg(machine, CM_REG_MCYCLE, &mcycle) != CM_ERROR_OK) {
         printf("failed to read machine cycle: %s\n", cm_get_last_error_message());
         cm_delete(machine);
         exit(1);
