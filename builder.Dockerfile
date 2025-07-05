@@ -18,10 +18,8 @@ EOF
 # Download cartesi machine
 RUN <<EOF
 set -e
-git clone --branch v0.19.0-test2 --depth 1 https://github.com/cartesi/machine-emulator.git
+git clone --branch v0.19.0 --depth 1 https://github.com/cartesi/machine-emulator.git
 cd machine-emulator
-wget https://github.com/cartesi/machine-emulator/releases/download/v0.19.0-test2/add-generated-files.diff
-patch -Np1 < add-generated-files.diff
 make bundle-boost
 EOF
 
