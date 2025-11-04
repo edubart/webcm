@@ -1,4 +1,4 @@
-FROM archlinux:base-devel
+FROM --platform=linux/amd64 archlinux:base-devel
 
 RUN pacman -Syyu --noconfirm && \
     pacman -S --noconfirm git wget vim emscripten lua libslirp pigz
