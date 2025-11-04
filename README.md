@@ -32,6 +32,10 @@ python -m http.server 8080
 
 Then navigate to http://127.0.0.1:8080/
 
+## Customizing
+
+To add new packages in the system you can edit what is installed in [rootfs.Dockerfile](rootfs.Dockerfile) and rebuild. You can also add new files and scripts to the system by placing them in the [skel](skel) subdirectory.
+
 ## How it works?
 
 The Cartesi Machine emulator library was compiled to WASM using Emscripten toolchain.

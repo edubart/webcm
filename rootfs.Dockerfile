@@ -1,10 +1,6 @@
 ################################
-# Busybox stage
-FROM --platform=linux/riscv64 riscv64/busybox:1.37.0-musl AS busybox-stage
-
-################################
-# Rootfs stage
-FROM --platform=linux/riscv64 riscv64/alpine:3.21.0 AS toolchain-stage
+# Toolchain stage
+FROM --platform=linux/riscv64 riscv64/alpine:3.22.2 AS toolchain-stage
 
 # Update and install development packages
 RUN apk update && \
@@ -15,21 +11,22 @@ RUN apk update && \
 WORKDIR /root
 
 ################################
-# Build xhalt
-FROM --platform=linux/riscv64 toolchain-stage AS xhalt-stage
+# Build tools
+FROM --platform=linux/riscv64 toolchain-stage AS tools-stage
+
+# Build xhalt (tool used by init system to poweroff the machine)
 RUN apk add libseccomp-dev
-RUN wget -O xhalt.c https://raw.githubusercontent.com/cartesi/machine-emulator-tools/158948a343e792c181a8cee6964cea122c644c52/sys-utils/xhalt/xhalt.c && \
+RUN wget -O xhalt.c https://raw.githubusercontent.com/cartesi/machine-guest-tools/refs/tags/v0.17.2/sys-utils/xhalt/xhalt.c && \
     mkdir -p /pkg/usr/sbin/ && \
     gcc xhalt.c -Os -s -o /pkg/usr/sbin/xhalt && \
     strip /pkg/usr/sbin/xhalt
 
 ################################
 # Download packages
-FROM --platform=linux/riscv64 riscv64/alpine:3.21.0 AS rootfs-stage
+FROM --platform=linux/riscv64 riscv64/alpine:3.22.2 AS rootfs-stage
 
 # Update packages
-RUN echo "@testing https://dl-cdn.alpinelinux.org/alpine/edge/testing" >> /etc/apk/repositories && \
-    apk update && \
+RUN apk update && \
     apk upgrade
 
 # Install development utilities
@@ -39,7 +36,6 @@ RUN apk add \
     tree-sitter-lua tree-sitter-c tree-sitter-javascript tree-sitter-python tree-sitter-json tree-sitter-bash \
     tmux \
     htop ncdu vifm \
-    duf@testing \
     strace dmesg \
     lua5.4 \
     quickjs \
@@ -47,18 +43,16 @@ RUN apk add \
     jq \
     bc \
     sqlite \
-    micropython@testing \
-    tcc@testing tcc-libs@testing tcc-libs-static@testing tcc-dev@testing musl-dev \
+    micropython \
+    tcc tcc-libs tcc-libs-static tcc-dev musl-dev \
     make \
     cmatrix
 
-# Overwrite busybox
-COPY --from=busybox-stage /bin/busybox /bin/busybox
-COPY --from=xhalt-stage /pkg/usr /usr
-
-# Install init
-ADD --chmod=755 https://raw.githubusercontent.com/cartesi/machine-emulator-tools/refs/heads/main/sys-utils/cartesi-init/cartesi-init /usr/sbin/cartesi-init
+# Install init system and base skel
+ADD --chmod=755 https://raw.githubusercontent.com/cartesi/machine-guest-tools/refs/tags/v0.17.2/sys-utils/cartesi-init/cartesi-init /usr/sbin/cartesi-init
+COPY --from=tools-stage /pkg/usr /usr
 COPY skel /
-RUN rm -rf /var/cache/apk && \
-    rm -f /usr/lib/*.a && \
-    ln -sf lua5.4 /usr/bin/lua
+RUN ln -sf lua5.4 /usr/bin/lua
+
+# Remove unneeded files
+RUN rm -rf /var/cache/apk && rm -f /usr/lib/*.a

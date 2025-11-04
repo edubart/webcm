@@ -29,7 +29,7 @@ Read more about at:
 If unsure, try these examples:
 
 htop                    ncdu /
-duf                     dmesg
+df                      dmesg
 nvim                    vifm
 bc                      tmux
 cmatrix                 sqlite3
