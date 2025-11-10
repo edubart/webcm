@@ -4,7 +4,6 @@ EMCC_CFLAGS=-Oz -g0 -std=gnu++23 \
    	-lcartesi \
     --js-library=emscripten-pty.js \
     -Wall -Wextra -Wno-unused-function -Wno-c23-extensions \
-    -fexceptions \
     -sASYNCIFY \
     -sFETCH \
    	-sSTACK_SIZE=4MB \

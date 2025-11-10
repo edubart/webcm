@@ -46,7 +46,7 @@ make -C src -j$(nproc) libcartesi.a \
     CXX=em++ \
     AR="emar rcs" \
     LUA_LIB= LUA_INC= \
-    OPTFLAGS="-O3 -g0 -fexceptions" \
+    OPTFLAGS="-O3 -g0" \
     slirp=no
 make install-headers install-static-libs \
     STRIP=emstrip \
