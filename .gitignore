@@ -4,3 +4,6 @@
 *.tar
 tasks.TODO
 emscripten-pty.js
+gh-pages
+*.wasm
+*.mjs
