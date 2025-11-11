@@ -36,8 +36,7 @@ RUN make -C https-proxy
 RUN mkdir -p /pkg/usr/sbin && \
     cp https-proxy/https-proxy /pkg/usr/sbin/https-proxy && \
     strip /pkg/usr/sbin/https-proxy && \
-    mkdir -p /pkg/usr/local/share/ca-certificates && \
-    cp https-proxy/cert.pem /pkg/usr/local/share/ca-certificates/localhost.crt
+    mkdir -p /pkg/etc/ssl/webcm
 
 # Build gcompat (tool to run GLIBC programs)
 FROM --platform=linux/riscv64 toolchain-stage AS gcompat-stage
@@ -93,12 +92,15 @@ RUN apk add \
     make \
     cmatrix \
     curl wget \
-    ca-certificates \
     dnsmasq \
     libatomic
 
 # Remove unneeded files
 RUN rm -rf /var/cache/apk && rm -f /usr/lib/*.a
+
+# Ensure SSL directories exist (they'll be populated by the proxy at runtime)
+RUN mkdir -p /etc/ssl/certs /usr/local/share/ca-certificates && \
+    touch /etc/ssl/cert.pem
 
 # Install init system and base skel
 ADD --chmod=755 https://raw.githubusercontent.com/cartesi/machine-guest-tools/refs/tags/v0.17.2/sys-utils/cartesi-init/cartesi-init /usr/sbin/cartesi-init
@@ -108,4 +110,3 @@ COPY --from=gcompat-stage /pkg /
 COPY --from=foundry-stage /pkg /
 COPY skel /
 RUN ln -sf lua5.4 /usr/bin/lua
-RUN update-ca-certificates

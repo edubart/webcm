@@ -13,7 +13,7 @@
 //
 //------------------------------------------------------------------------------
 
-#include "server_certificate.hpp"
+#include "cert_store.hpp"
 
 #include <boost/asio/dispatch.hpp>
 #include <boost/asio/ssl.hpp>
@@ -34,6 +34,7 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+#include <openssl/ssl.h>
 
 namespace beast = boost::beast;   // from <boost/beast.hpp>
 namespace http = beast::http;     // from <boost/beast/http.hpp>
@@ -340,6 +341,7 @@ public:
         // Consume the portion of the buffer used by the handshake
         buffer_.consume(bytes_used);
 
+        // Certificate injection happens in SNI callback before handshake completes
         do_read();
     }
 
@@ -362,6 +364,23 @@ public:
 };
 
 //------------------------------------------------------------------------------
+
+// SNI callback to capture hostname and inject certificate
+static int sni_callback(SSL* ssl, int* /*ad*/, void* /*arg*/) {
+    const char* servername = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
+    if (servername && servername[0] != '\0') {
+        std::string hostname(servername);
+        auto cert_pair = cert_store::instance().issue_for_host(hostname);
+        if (cert_pair.cert && cert_pair.key) {
+            if (SSL_use_certificate(ssl, cert_pair.cert.get()) == 1 &&
+                SSL_use_PrivateKey(ssl, cert_pair.key.get()) == 1) {
+                // Certificate injected successfully
+                return SSL_TLSEXT_ERR_OK;
+            }
+        }
+    }
+    return SSL_TLSEXT_ERR_OK;
+}
 
 // Detects SSL handshakes
 class detect_session : public std::enable_shared_from_this<detect_session> {
@@ -488,8 +507,19 @@ int main(int argc, char *argv[]) try {
     // The SSL context is required, and holds certificates
     ssl::context ctx{ssl::context::tlsv12};
 
-    // This holds the self-signed certificate used by the server
-    load_server_certificate(ctx);
+    // Initialize certificate store
+    if (!cert_store::instance().ensure_ca()) {
+        std::cerr << "Failed to initialize certificate store\n";
+        return EXIT_FAILURE;
+    }
+
+    // Set up SNI callback for dynamic certificate injection
+    SSL_CTX_set_tlsext_servername_callback(ctx.native_handle(), sni_callback);
+    SSL_CTX_set_tlsext_servername_arg(ctx.native_handle(), nullptr);
+
+    // Set basic SSL context options
+    ctx.set_options(boost::asio::ssl::context::default_workarounds | boost::asio::ssl::context::no_sslv2 |
+        boost::asio::ssl::context::single_dh_use);
 
     // Create and launch a listening port
     std::make_shared<listener>(ioc, ctx, tcp::endpoint{address, port1})->run();
