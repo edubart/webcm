@@ -6,7 +6,9 @@ It's powered by the
 [Cartesi Machine emulator](https://github.com/cartesi/machine-emulator),
 which enables deterministic, verifiable and sandboxed execution of RV64GC Linux applications.
 
-It's packaged as a single 24MiB WebAssembly file containing the emulator, the kernel and Alpine Linux operating system.
+It's packaged as a single 32MiB WebAssembly file containing the emulator, the kernel and Alpine Linux operating system.
+
+Networking supports HTTP/HTTPS requests, but is subject to CORS restrictions, therefore only endpoints that allow cross-origin requests will work.
 
 [![WebCM](social.png)](https://edubart.github.io/webcm/)
 
@@ -35,6 +37,14 @@ Then navigate to http://127.0.0.1:8080/
 ## Customizing
 
 To add new packages in the system you can edit what is installed in [rootfs.Dockerfile](rootfs.Dockerfile) and rebuild. You can also add new files and scripts to the system by placing them in the [skel](skel) subdirectory.
+
+## Networking
+
+The virtual machine has internet access via HTTP/HTTPS through a proxy architecture. All DNS queries inside the VM resolve to localhost (127.0.0.1), redirecting network traffic to an internal proxy service.
+
+When the VM makes HTTP/HTTPS requests, the internal proxy intercepts them and forwards them to the host browser. The browser then executes these requests using the Fetch API and tunnels the responses back to the VM through the proxy.
+
+This architecture enables installing Alpine packages from permissive mirrors and querying public APIs. However, since requests are executed in the browser context, only endpoints that permit cross-origin requests (CORS) will be accessible.
 
 ## How it works?
 

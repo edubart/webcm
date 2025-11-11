@@ -1,6 +1,6 @@
 ################################
 # Toolchain stage
-FROM --platform=linux/riscv64 alpine:latest@sha256:4b7ce07002c69e8f3d704a9c5d6fd3053be500b7f1c69fc0d80990c2ad8dd412 AS alpine-base
+FROM --platform=linux/riscv64 alpine:3.22.2@sha256:4b7ce07002c69e8f3d704a9c5d6fd3053be500b7f1c69fc0d80990c2ad8dd412 AS alpine-base
 
 # Update system
 RUN apk update && \
@@ -33,10 +33,9 @@ FROM --platform=linux/riscv64 toolchain-stage AS proxy-stage
 RUN apk add boost-dev openssl-dev
 COPY https-proxy https-proxy
 RUN make -C https-proxy
-RUN mkdir -p /pkg/usr/sbin && \
+RUN mkdir -p /pkg/usr/sbin /pkg/etc/ssl/webcm /pkg/etc/ssl/certs /pkg/usr/local/share/ca-certificates && \
     cp https-proxy/https-proxy /pkg/usr/sbin/https-proxy && \
-    strip /pkg/usr/sbin/https-proxy && \
-    mkdir -p /pkg/etc/ssl/webcm
+    strip /pkg/usr/sbin/https-proxy
 
 # Build gcompat (tool to run GLIBC programs)
 FROM --platform=linux/riscv64 toolchain-stage AS gcompat-stage
@@ -62,12 +61,6 @@ EOF
 RUN cd gcompat && git apply gcompat.patch
 RUN make -C gcompat -j$(nproc) LINKER_PATH=/lib/ld-musl-riscv64.so.1 LOADER_NAME=ld-linux-riscv64-lp64d.so.1
 RUN make -C gcompat install LINKER_PATH=/lib/ld-musl-riscv64.so.1 LOADER_NAME=ld-linux-riscv64-lp64d.so.1 DESTDIR=/pkg
-
-# Build foundry (tool to query Web3 RPCs)
-FROM --platform=linux/riscv64 toolchain-stage AS foundry-stage
-ADD --chmod=755 https://github.com/crypto-bug-hunters/builtins/releases/download/v0.8.0/cast-2cdbfac-linux-riscv64 /pkg/usr/bin/cast
-RUN strip /pkg/usr/bin/cast
-RUN patchelf --add-needed libgcompat.so.0 /pkg/usr/bin/cast
 
 ################################
 # Download packages
@@ -96,17 +89,12 @@ RUN apk add \
     libatomic
 
 # Remove unneeded files
-RUN rm -rf /var/cache/apk && rm -f /usr/lib/*.a
-
-# Ensure SSL directories exist (they'll be populated by the proxy at runtime)
-RUN mkdir -p /etc/ssl/certs /usr/local/share/ca-certificates && \
-    touch /etc/ssl/cert.pem
+RUN rm -rf /var/cache/apk
 
 # Install init system and base skel
 ADD --chmod=755 https://raw.githubusercontent.com/cartesi/machine-guest-tools/refs/tags/v0.17.2/sys-utils/cartesi-init/cartesi-init /usr/sbin/cartesi-init
 COPY --from=xhalt-stage /pkg /
 COPY --from=proxy-stage /pkg /
 COPY --from=gcompat-stage /pkg /
-COPY --from=foundry-stage /pkg /
 COPY skel /
 RUN ln -sf lua5.4 /usr/bin/lua

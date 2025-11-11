@@ -20,7 +20,9 @@ WebCM is a serverless terminal that runs a virtual Linux directly in the browser
 
 It's powered by the Cartesi Machine emulator, which enables deterministic, verifiable and sandboxed execution of RV64GC Linux applications.
 
-It's packaged as a single 24MiB WebAssembly file containing the emulator, the kernel and Alpine Linux operating system.
+It's packaged as a single 32MiB WebAssembly file containing the emulator, the kernel and Alpine Linux operating system.
+
+Networking supports HTTP/HTTPS requests, but is subject to CORS restrictions, therefore only endpoints that allow cross-origin requests will work.
 
 Read more about at:
   $(link)https://github.com/edubart/webcm$(reset)

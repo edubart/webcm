@@ -1,2 +1,1 @@
 export EDITOR=nvim
-export ETH_RPC_URL=http://core.gashawk.io/rpc
