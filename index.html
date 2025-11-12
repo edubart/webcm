@@ -102,6 +102,19 @@
                 fitAddon.fit();
             }).observe(terminalElem);
 
+            // Register Service Worker for /@// routing
+            if ('serviceWorker' in navigator) {
+                try {
+                    const registration = await navigator.serviceWorker.register('./service-worker.js', {
+                        scope: './'
+                    });
+                    console.log('Service Worker registered:', registration.scope);
+                    await navigator.serviceWorker.ready;
+                } catch (error) {
+                    console.error('Service Worker registration failed:', error);
+                }
+            }
+
             // Download and initialize the emscripten module
             xterm.write("Downloading...\n\r");
             import initEmscripten from "./webcm.mjs";
@@ -290,11 +303,59 @@
                 });
             };
 
-            window.webcm = { 
+            window.webcm = {
                 fetch: window.vmFetch,
                 vmFetch: window.vmFetch
             };
             window.reverseProxyRequest = window.vmFetch;
+
+            // Register this tab as VM owner for Service Worker routing
+            if (navigator.serviceWorker.controller) {
+                navigator.serviceWorker.controller.postMessage({
+                    type: 'registerVM'
+                });
+                console.log('Registered as VM owner');
+            }
+
+            // Unregister when page unloads
+            window.addEventListener('beforeunload', () => {
+                if (navigator.serviceWorker.controller) {
+                    navigator.serviceWorker.controller.postMessage({
+                        type: 'unregisterVM'
+                    });
+                }
+            });
+
+            // Handle vmFetch messages from Service Worker
+            navigator.serviceWorker.addEventListener('message', async (event) => {
+                if (event.data.type === 'vmFetch') {
+                    const { url, method, headers, body } = event.data;
+                    const port = event.ports[0];
+
+                    try {
+                        const options = { method, headers };
+                        if (body) {
+                            options.body = body;
+                        }
+
+                        const response = await window.vmFetch(url, options);
+                        const responseBody = await response.arrayBuffer();
+
+                        // Transfer ArrayBuffer instead of copying (zero-copy)
+                        port.postMessage({
+                            status: response.status,
+                            statusText: response.statusText,
+                            headers: Object.fromEntries(response.headers.entries()),
+                            body: responseBody
+                        }, [responseBody]);
+                    } catch (error) {
+                        console.error('VM fetch error:', error);
+                        port.postMessage({
+                            error: error.message || 'Failed to fetch'
+                        });
+                    }
+                }
+            });
         </script>
     </body>
 </html>
