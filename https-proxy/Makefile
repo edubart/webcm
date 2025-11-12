@@ -1,4 +1,4 @@
-CXXFLAGS=-std=gnu++23 -Wall -Wextra -O1
+CXXFLAGS=-std=gnu++23 -Wall -Wextra -Os
 HARDEN_CXXFLAGS=-fno-strict-aliasing -fno-strict-overflow -fhardened
 LDFLAGS=-lssl -lcrypto -static-libstdc++ -s
 

@@ -35,6 +35,7 @@ df                      dmesg
 nvim                    vifm
 bc                      tmux
 cmatrix                 sqlite3
+apk add gcc             curl ifconfig.me/ip
 lua hello.lua           tmux-hello-lua
 qjs hello.js            tmux-hello-js
 micropython hello.py    tmux-hello-py

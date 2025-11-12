@@ -40,11 +40,37 @@ To add new packages in the system you can edit what is installed in [rootfs.Dock
 
 ## Networking
 
-The virtual machine has internet access via HTTP/HTTPS through a proxy architecture. All DNS queries inside the VM resolve to localhost (127.0.0.1), redirecting network traffic to an internal proxy service.
+The virtual machine has internet access via HTTP/HTTPS through a proxy architecture. All DNS queries inside the VM resolve to localhost, redirecting network traffic to an internal proxy service.
 
 When the VM makes HTTP/HTTPS requests, the internal proxy intercepts them and forwards them to the host browser. The browser then executes these requests using the Fetch API and tunnels the responses back to the VM through the proxy.
 
 This architecture enables installing Alpine packages from permissive mirrors and querying public APIs. However, since requests are executed in the browser context, only endpoints that permit cross-origin requests (CORS) will be accessible.
+
+## Testing the network
+
+You can use `curl` to test HTTPS networking, for instance you can query your IP with:
+
+```sh
+curl ifconfig.me/ip
+```
+
+## Installing packages
+
+You can install packages on the system using the APK (Alpine package manager), for example:
+
+```sh
+apk add gcc
+gcc hello.c -o hello && ./hello
+```
+
+## Cloning git repositories
+
+You can clone git repositories from GitHub via HTTPS by prepending `https://cors.isomorphic-git.org/` to the URL (to bypass CORS restrictions), for example:
+
+```sh
+git clone --depth=1 https://cors.isomorphic-git.org/github.com/leachim6/hello-world.git
+lua hello-world/l/Lua.lua
+```
 
 ## How it works?
 

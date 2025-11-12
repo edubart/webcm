@@ -83,13 +83,14 @@ RUN apk add \
     micropython \
     tcc tcc-libs tcc-libs-static tcc-dev musl-dev \
     make \
+    git \
     cmatrix \
     curl wget \
     dnsmasq \
     libatomic
 
-# Remove unneeded files
-RUN rm -rf /var/cache/apk
+# Remove unneeded files to shrink image size
+RUN rm -rf /var/cache/apk /usr/lib/libc.a
 
 # Install init system and base skel
 ADD --chmod=755 https://raw.githubusercontent.com/cartesi/machine-guest-tools/refs/tags/v0.17.2/sys-utils/cartesi-init/cartesi-init /usr/sbin/cartesi-init

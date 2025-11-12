@@ -7,7 +7,7 @@ EMCC_CFLAGS=-Oz -g0 -std=gnu++23 \
     -sASYNCIFY \
     -sFETCH \
    	-sSTACK_SIZE=4MB \
-   	-sTOTAL_MEMORY=512MB
+   	-sTOTAL_MEMORY=768MB
 SKEL_FILES=$(shell find skel -type f)
 SRC_FILES=$(shell find https-proxy -type f -name '*.cpp' -o -name '*.hpp' -o -name Makefile)
 
@@ -34,7 +34,7 @@ rootfs.ext2: rootfs.tar
 	xgenext2fs \
 	    --faketime \
 	    --allow-holes \
-	    --size-in-blocks 65536 \
+	    --size-in-blocks 98304 \
 	    --block-size 4096 \
 	    --bytes-per-inode 4096 \
 	    --volume-label rootfs \

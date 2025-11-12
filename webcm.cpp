@@ -23,8 +23,8 @@
 #include "third-party/miniz.h"
 #include "third-party/miniz.c"
 
-#define RAM_SIZE (UINT64_C(128)*1024*1024)
-#define ROOTFS_SIZE (UINT64_C(256)*1024*1024)
+#define RAM_SIZE (UINT64_C(256)*1024*1024)
+#define ROOTFS_SIZE (UINT64_C(384)*1024*1024)
 #define RAM_START UINT64_C(0x80000000)
 #define ROOTFS_START UINT64_C(0x80000000000000)
 

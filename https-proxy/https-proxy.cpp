@@ -157,7 +157,7 @@ static http::message_generator handle_request(http::request<Body, http::basic_fi
         res.set(mmio_res.headers[i][0], mmio_res.headers[i][1]);
     }
     res.keep_alive(false);
-    res.body() = body;
+    res.body() = std::move(body);
     res.prepare_payload();
 
     std::ignore = std::move(req);
@@ -215,7 +215,7 @@ public:
 
     void do_read() {
         // Set the timeout.
-        beast::get_lowest_layer(derived().stream()).expires_after(std::chrono::seconds(30));
+        // beast::get_lowest_layer(derived().stream()).expires_after(std::chrono::seconds(30));
 
         // Read a request
         http::async_read(derived().stream(), buffer_, req_,
@@ -323,7 +323,7 @@ public:
         // on the I/O objects in this session.
         net::dispatch(stream_.get_executor(), [self]() {
             // Set the timeout.
-            beast::get_lowest_layer(self->stream_).expires_after(std::chrono::seconds(30));
+            // beast::get_lowest_layer(self->stream_).expires_after(std::chrono::seconds(30));
 
             // Perform the SSL handshake
             // Note, this is the buffered version of the handshake.
@@ -347,7 +347,7 @@ public:
 
     void do_eof() {
         // Set the timeout.
-        beast::get_lowest_layer(stream_).expires_after(std::chrono::seconds(30));
+        // beast::get_lowest_layer(stream_).expires_after(std::chrono::seconds(30));
 
         // Perform the SSL shutdown
         stream_.async_shutdown(beast::bind_front_handler(&ssl_session::on_shutdown, shared_from_this()));
@@ -394,7 +394,7 @@ public:
     // Launch the detector
     void run() {
         // Set the timeout.
-        beast::get_lowest_layer(stream_).expires_after(std::chrono::seconds(30));
+        // beast::get_lowest_layer(stream_).expires_after(std::chrono::seconds(30));
 
         // Detect a TLS handshake
         async_detect_ssl(stream_, buffer_, beast::bind_front_handler(&detect_session::on_detect, shared_from_this()));
