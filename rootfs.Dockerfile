@@ -86,7 +86,6 @@ RUN apk add \
     git \
     cmatrix \
     curl wget \
-    dnsmasq \
     libatomic
 
 # Remove unneeded files to shrink image size
