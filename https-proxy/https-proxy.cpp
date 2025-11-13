@@ -519,7 +519,10 @@ int main(int argc, char *argv[]) try {
 
     // Set basic SSL context options
     ctx.set_options(boost::asio::ssl::context::default_workarounds | boost::asio::ssl::context::no_sslv2 |
-        boost::asio::ssl::context::single_dh_use);
+        boost::asio::ssl::context::no_sslv3 | boost::asio::ssl::context::single_dh_use);
+
+    // Force most efficient TLS 1.2 ciphers for VM (ChaCha20 + AES-128 only)
+    SSL_CTX_set_cipher_list(ctx.native_handle(), "ECDHE-RSA-CHACHA20-POLY1305:AES128-GCM-SHA256:AES128-SHA256");
 
     // Create and launch a listening port
     std::make_shared<listener>(ioc, ctx, tcp::endpoint{address, port1})->run();

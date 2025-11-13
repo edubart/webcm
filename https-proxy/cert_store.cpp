@@ -104,22 +104,17 @@ bool cert_store::load_ca() {
 
 bool cert_store::create_ca() {
     // Generate CA private key
-    EVP_PKEY* key = EVP_PKEY_new();
-    if (!key) {
-        return false;
-    }
-
-    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_EC, nullptr);
+    EVP_PKEY* key = nullptr;
+    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr);
     if (!ctx) {
-        EVP_PKEY_free(key);
         return false;
     }
 
     if (EVP_PKEY_keygen_init(ctx) <= 0 ||
-        EVP_PKEY_CTX_set_ec_paramgen_curve_nid(ctx, NID_X9_62_prime256v1) <= 0 ||
+        EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, 2048) <= 0 ||
         EVP_PKEY_keygen(ctx, &key) <= 0) {
         EVP_PKEY_CTX_free(ctx);
-        EVP_PKEY_free(key);
+        if (key) EVP_PKEY_free(key);
         return false;
     }
     EVP_PKEY_CTX_free(ctx);
@@ -345,22 +340,17 @@ cert_store::cert_pair cert_store::create_cert_for_host(const std::string& hostna
     }
 
     // Generate leaf private key
-    EVP_PKEY* key = EVP_PKEY_new();
-    if (!key) {
-        return cert_pair();
-    }
-
-    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_EC, nullptr);
+    EVP_PKEY* key = nullptr;
+    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr);
     if (!ctx) {
-        EVP_PKEY_free(key);
         return cert_pair();
     }
 
     if (EVP_PKEY_keygen_init(ctx) <= 0 ||
-        EVP_PKEY_CTX_set_ec_paramgen_curve_nid(ctx, NID_X9_62_prime256v1) <= 0 ||
+        EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, 2048) <= 0 ||
         EVP_PKEY_keygen(ctx, &key) <= 0) {
         EVP_PKEY_CTX_free(ctx);
-        EVP_PKEY_free(key);
+        if (key) EVP_PKEY_free(key);
         return cert_pair();
     }
     EVP_PKEY_CTX_free(ctx);
