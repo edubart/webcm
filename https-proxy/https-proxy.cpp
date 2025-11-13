@@ -38,6 +38,8 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+#include <chrono>
+#include <functional>
 #include <openssl/ssl.h>
 
 // Provide boost::throw_exception implementation for -fno-exceptions build
@@ -66,6 +68,10 @@ enum class yield_type : uint64_t {
     REQUEST,
     POLL_RESPONSE,
     POLL_RESPONSE_BODY,
+    POLL_REVERSE_REQUEST,
+    POLL_REVERSE_REQUEST_BODY,
+    SEND_REVERSE_RESPONSE,
+    SEND_REVERSE_RESPONSE_BODY,
 };
 
 struct yield_mmio_req final {
@@ -79,6 +85,24 @@ struct yield_mmio_req final {
 
 struct yield_mmio_res final {
     uint64_t ready_state{0};
+    uint64_t status{0};
+    uint64_t body_total_length{0};
+    uint64_t headers_count{0};
+    char headers[64][2][256]{};
+};
+
+struct reverse_mmio_req final {
+    uint64_t uid{0};
+    uint64_t headers_count{0};
+    uint64_t body_vaddr{0};
+    uint64_t body_length{0};
+    char url[4096]{};
+    char method[32]{};
+    char headers[64][2][256]{};
+};
+
+struct reverse_mmio_res final {
+    uint64_t uid{0};
     uint64_t status{0};
     uint64_t body_total_length{0};
     uint64_t headers_count{0};
@@ -181,6 +205,171 @@ static http::message_generator handle_request(http::request<Body, http::basic_fi
 
     std::ignore = std::move(req);
     return res;
+}
+
+// Handle reverse proxy requests from browser (similar to handle_request for forward proxy)
+static void handle_reverse_proxy_request() {
+    reverse_mmio_req mmio_req;
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    if (softyield(static_cast<uint64_t>(yield_type::POLL_REVERSE_REQUEST), 0, reinterpret_cast<uintptr_t>(&mmio_req)) != 0) {
+        return; // No request or error
+    }
+
+    // Check if request is empty (no request available)
+    if (mmio_req.url[0] == '\0' && mmio_req.method[0] == '\0') {
+        return;
+    }
+
+    const uint64_t uid = mmio_req.uid;
+
+    auto const bad_request = [&uid]() {
+        reverse_mmio_res mmio_res;
+        mmio_res.uid = uid;
+        mmio_res.status = 400;
+        mmio_res.body_total_length = 0;
+        mmio_res.headers_count = 0;
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+        if (softyield(static_cast<uint64_t>(yield_type::SEND_REVERSE_RESPONSE), uid, reinterpret_cast<uintptr_t>(&mmio_res)) != 0) {
+            return;
+        }
+    };
+
+    std::string request_body;
+    if (mmio_req.body_length > 0) {
+        request_body.resize(mmio_req.body_length, '\x0');
+        if (softyield(static_cast<uint64_t>(yield_type::POLL_REVERSE_REQUEST_BODY),
+                uid, // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+                reinterpret_cast<uintptr_t>(request_body.data())) != 0) {
+            bad_request();
+            return;
+        }
+    }
+
+    // All hostnames resolve to 127.0.0.1, extract port and path from URL
+    std::string url_str(mmio_req.url);
+    std::string method_str(mmio_req.method);
+
+    uint16_t target_port = 80;
+    std::string target_path = "/";
+
+    size_t scheme_end = url_str.find("://");
+    if (scheme_end != std::string::npos) {
+        size_t host_start = scheme_end + 3;
+        size_t path_start = url_str.find('/', host_start);
+        size_t port_start = url_str.find(':', host_start);
+
+        if (path_start == std::string::npos) {
+            path_start = url_str.length();
+        }
+
+        if (port_start != std::string::npos && port_start < path_start) {
+            std::string port_str = url_str.substr(port_start + 1, path_start - port_start - 1);
+            target_port = static_cast<uint16_t>(std::strtol(port_str.c_str(), nullptr, 10));
+        }
+
+        if (path_start < url_str.length()) {
+            target_path = url_str.substr(path_start);
+        }
+    }
+
+    try {
+        net::io_context ioc;
+        tcp::resolver resolver(ioc);
+        beast::tcp_stream stream(ioc);
+
+        beast::error_code ec;
+        auto const results = resolver.resolve("127.0.0.1", std::to_string(target_port), ec);
+        if (ec) {
+            throw beast::system_error{ec};
+        }
+
+        stream.connect(results, ec);
+        if (ec) {
+            throw beast::system_error{ec};
+        }
+
+        http::request<http::string_body> req{http::string_to_verb(method_str), target_path, 11};
+        req.set(http::field::host, "127.0.0.1:" + std::to_string(target_port));
+        req.set(http::field::user_agent, BOOST_BEAST_VERSION_STRING);
+
+        for (uint64_t i = 0; i < mmio_req.headers_count; ++i) {
+            req.set(mmio_req.headers[i][0], mmio_req.headers[i][1]);
+        }
+
+        if (!request_body.empty()) {
+            req.body() = request_body;
+            req.prepare_payload();
+        }
+
+        http::write(stream, req);
+
+        beast::flat_buffer buffer;
+        http::response<http::string_body> res;
+        http::read(stream, buffer, res);
+
+        stream.socket().shutdown(tcp::socket::shutdown_both, ec);
+        reverse_mmio_res mmio_res;
+        mmio_res.uid = uid;
+        mmio_res.status = static_cast<uint64_t>(res.result_int());
+        mmio_res.body_total_length = res.body().length();
+        mmio_res.headers_count = 0;
+
+        // Copy headers
+        for (auto &field : res) {
+            if (mmio_res.headers_count >= 64) {
+                break;
+            }
+            strsvcopy(mmio_res.headers[mmio_res.headers_count][0], field.name_string());
+            strsvcopy(mmio_res.headers[mmio_res.headers_count][1], field.value());
+            mmio_res.headers_count++;
+        }
+
+        // Send response headers via softyield
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+        if (softyield(static_cast<uint64_t>(yield_type::SEND_REVERSE_RESPONSE), uid, reinterpret_cast<uintptr_t>(&mmio_res)) != 0) {
+            return;
+        }
+
+        // Send response body if present (similar to POLL_RESPONSE_BODY in forward proxy)
+        if (mmio_res.body_total_length > 0) {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+            if (softyield(static_cast<uint64_t>(yield_type::SEND_REVERSE_RESPONSE_BODY),
+                    uid, // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+                    reinterpret_cast<uintptr_t>(const_cast<char*>(res.body().c_str()))) != 0) {
+                return;
+            }
+        }
+    } catch (beast::system_error const &e) {
+        reverse_mmio_res mmio_res;
+        mmio_res.uid = uid;
+
+        // Map network errors to appropriate HTTP status codes
+        if (e.code() == boost::asio::error::connection_refused) {
+            mmio_res.status = 502;
+        } else if (e.code() == boost::asio::error::timed_out) {
+            mmio_res.status = 504;
+        } else if (e.code() == boost::asio::error::host_not_found ||
+                   e.code() == boost::asio::error::host_not_found_try_again) {
+            mmio_res.status = 502;
+        } else {
+            mmio_res.status = 502;
+        }
+
+        mmio_res.body_total_length = 0;
+        mmio_res.headers_count = 0;
+
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+        softyield(static_cast<uint64_t>(yield_type::SEND_REVERSE_RESPONSE), uid, reinterpret_cast<uintptr_t>(&mmio_res));
+    } catch (std::exception const &e) {
+        reverse_mmio_res mmio_res;
+        mmio_res.uid = uid;
+        mmio_res.status = 500;
+        mmio_res.body_total_length = 0;
+        mmio_res.headers_count = 0;
+
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+        softyield(static_cast<uint64_t>(yield_type::SEND_REVERSE_RESPONSE), uid, reinterpret_cast<uintptr_t>(&mmio_res));
+    }
 }
 
 //------------------------------------------------------------------------------
@@ -829,6 +1018,17 @@ int main(int argc, char *argv[]) {
     // Create and launch HTTP/HTTPS listening ports
     std::make_shared<listener>(ioc, ctx, tcp::endpoint{address, port1})->run();
     std::make_shared<listener>(ioc, ctx, tcp::endpoint{address, port2})->run();
+
+    // Set up periodic reverse proxy polling
+    std::function<void()> poll_reverse_proxy = [&ioc, &poll_reverse_proxy]() {
+        handle_reverse_proxy_request();
+        // Schedule next poll in 100ms
+        auto timer = std::make_shared<net::steady_timer>(ioc, std::chrono::milliseconds(100));
+        timer->async_wait([timer, &poll_reverse_proxy](beast::error_code) {
+            poll_reverse_proxy();
+        });
+    };
+    poll_reverse_proxy();
 
     // Run the I/O service on the requested number of threads
     std::vector<std::thread> v;

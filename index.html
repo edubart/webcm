@@ -105,7 +105,196 @@
             // Download and initialize the emscripten module
             xterm.write("Downloading...\n\r");
             import initEmscripten from "./webcm.mjs";
-            await initEmscripten({ pty: slave });
+            const Module = await initEmscripten({ pty: slave });
+
+
+            function serializeHeaders(headers) {
+                if (!headers) return '';
+                if (headers instanceof Headers) {
+                    return Array.from(headers.entries()).map(([k, v]) => `${k}: ${v}`).join('\n');
+                }
+                if (Array.isArray(headers)) {
+                    return headers.map(([k, v]) => `${k}: ${v}`).join('\n');
+                }
+                return Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join('\n');
+            }
+
+            async function prepareBody(body, headers) {
+                if (body === null || body === undefined) {
+                    return { data: null, contentType: null };
+                }
+
+                const encoder = new TextEncoder();
+                const getContentType = () => headers instanceof Headers ? headers.get('Content-Type') : headers?.['Content-Type'];
+
+                if (typeof body === 'string') {
+                    return { data: encoder.encode(body), contentType: null };
+                }
+                if (body instanceof Uint8Array) {
+                    return { data: body, contentType: null };
+                }
+                if (body instanceof ArrayBuffer) {
+                    return { data: new Uint8Array(body), contentType: null };
+                }
+                if (body instanceof Blob) {
+                    return { data: new Uint8Array(await body.arrayBuffer()), contentType: null };
+                }
+                if (body instanceof FormData || body instanceof URLSearchParams) {
+                    const params = body instanceof FormData ? new URLSearchParams(body) : body;
+                    return {
+                        data: encoder.encode(params.toString()),
+                        contentType: getContentType() || 'application/x-www-form-urlencoded'
+                    };
+                }
+                // Default: JSON stringify
+                return {
+                    data: encoder.encode(JSON.stringify(body)),
+                    contentType: getContentType() || 'application/json'
+                };
+            }
+
+            // Fetch API for making HTTP requests inside the VM
+            window.vmFetch = async function(urlOrRequest, options = {}) {
+                let url, method, headers, body;
+                if (typeof urlOrRequest === 'string' || urlOrRequest instanceof URL) {
+                    url = urlOrRequest.toString();
+                    method = (options.method || 'GET').toUpperCase();
+                    headers = options.headers || {};
+                    body = options.body || null;
+                } else if (urlOrRequest instanceof Request) {
+                    url = urlOrRequest.url;
+                    method = (options.method || urlOrRequest.method).toUpperCase();
+                    headers = new Headers(urlOrRequest.headers);
+                    if (options.headers) {
+                        const merge = new Headers(options.headers);
+                        merge.forEach((v, k) => headers.set(k, v));
+                    }
+                    body = options.body !== undefined ? options.body :
+                           (!urlOrRequest.bodyUsed ? await urlOrRequest.clone().arrayBuffer() : null);
+                } else {
+                    throw new TypeError('First argument must be a string, URL, or Request object');
+                }
+
+                let parsedUrl;
+                try {
+                    parsedUrl = new URL(url);
+                } catch (e) {
+                    throw new TypeError(`Invalid URL: ${url}`);
+                }
+
+                if (options.signal?.aborted) {
+                    throw new DOMException('The operation was aborted.', 'AbortError');
+                }
+
+                // Preserve original hostname in Host header (all hosts resolve to 127.0.0.1 in VM)
+                if (headers instanceof Headers) {
+                    if (!headers.has('Host')) {
+                        headers.set('Host', parsedUrl.host);
+                    }
+                    if (!headers.has('User-Agent')) {
+                        headers.set('User-Agent', navigator.userAgent);
+                    }
+                } else {
+                    if (!headers['Host'] && !headers['host']) {
+                        headers['Host'] = parsedUrl.host;
+                    }
+                    if (!headers['User-Agent'] && !headers['user-agent']) {
+                        headers['User-Agent'] = navigator.userAgent;
+                    }
+                }
+
+                const { data: bodyData, contentType } = await prepareBody(body, headers);
+                let headersStr = serializeHeaders(headers);
+                if (contentType && !headersStr.toLowerCase().includes('content-type:')) {
+                    headersStr = `Content-Type: ${contentType}\n${headersStr}`;
+                }
+
+                let uid;
+                try {
+                    Module._tempBodyData = bodyData;
+                    uid = Module.ccall('vmFetch', 'number',
+                        ['string', 'string', 'string', 'number'],
+                        [url, method, headersStr || null, bodyData?.length || 0]
+                    );
+                } catch (e) {
+                    Module._tempBodyData = null;
+                    throw new TypeError('Failed to queue request: ' + e.message);
+                }
+
+                return new Promise((resolve, reject) => {
+                    let aborted = false;
+                    const timeout = options.timeout ?? 30000;
+
+                    const cleanup = () => {
+                        if (timeoutId) clearTimeout(timeoutId);
+                        if (abortHandler && options.signal) {
+                            options.signal.removeEventListener('abort', abortHandler);
+                        }
+                    };
+
+                    const abort = (error) => {
+                        aborted = true;
+                        Module._cancel_reverse_request(uid);
+                        Module._pendingResponses?.delete(Number(uid));
+                        cleanup();
+                        reject(error);
+                    };
+
+                    const timeoutId = timeout > 0 ? setTimeout(() =>
+                        abort(new TypeError('Network request timeout')), timeout
+                    ) : null;
+
+                    const abortHandler = options.signal ? () =>
+                        abort(new DOMException('The operation was aborted.', 'AbortError'))
+                    : null;
+                    if (abortHandler) options.signal.addEventListener('abort', abortHandler);
+
+                    const poll = () => {
+                        if (aborted) return;
+
+                        if (Module._prepare_reverse_response(uid)) {
+                            cleanup();
+
+                            const responseData = Module._pendingResponses.get(Number(uid));
+                            Module._pendingResponses.delete(Number(uid));
+
+                            if (!responseData || responseData.status === 0) {
+                                reject(new TypeError('Failed to fetch'));
+                                return;
+                            }
+
+                            // Proxy network errors (502/504 with no body/headers) reject like fetch()
+                            if ((responseData.status === 502 || responseData.status === 504) &&
+                                (!responseData.body || responseData.body.length === 0) &&
+                                responseData.headers.size === 0) {
+                                reject(new TypeError('Failed to fetch'));
+                                return;
+                            }
+
+                            const bodyStream = responseData.body?.length > 0 ? new ReadableStream({
+                                start(controller) {
+                                    controller.enqueue(responseData.body);
+                                    controller.close();
+                                }
+                            }) : null;
+
+                            resolve(new Response(bodyStream, {
+                                status: responseData.status,
+                                headers: responseData.headers
+                            }));
+                        } else {
+                            setTimeout(poll, 10);
+                        }
+                    };
+                    poll();
+                });
+            };
+
+            window.webcm = { 
+                fetch: window.vmFetch,
+                vmFetch: window.vmFetch
+            };
+            window.reverseProxyRequest = window.vmFetch;
         </script>
     </body>
 </html>

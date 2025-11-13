@@ -11,10 +11,13 @@
 #include <string>
 #include <sstream>
 #include <memory>
+#include <queue>
+#include <functional>
 
 #include "cartesi-machine/machine-c-api.h"
 #include <emscripten.h>
 #include <emscripten/fetch.h>
+#include <emscripten/em_js.h>
 
 #define MINIZ_NO_ARCHIVE_APIS
 #define MINIZ_NO_STDIO
@@ -67,6 +70,10 @@ enum class yield_type : uint64_t {
     REQUEST,
     POLL_RESPONSE,
     POLL_RESPONSE_BODY,
+    POLL_REVERSE_REQUEST,
+    POLL_REVERSE_REQUEST_BODY,
+    SEND_REVERSE_RESPONSE,
+    SEND_REVERSE_RESPONSE_BODY,
 };
 
 struct yield_mmio_req final {
@@ -86,6 +93,24 @@ struct yield_mmio_res final {
     char headers[64][2][256]{};
 };
 
+struct reverse_mmio_req final {
+    uint64_t uid{0};
+    uint64_t headers_count{0};
+    uint64_t body_vaddr{0};
+    uint64_t body_length{0};
+    char url[4096]{};
+    char method[32]{};
+    char headers[64][2][256]{};
+};
+
+struct reverse_mmio_res final {
+    uint64_t uid{0};
+    uint64_t status{0};
+    uint64_t body_total_length{0};
+    uint64_t headers_count{0};
+    char headers[64][2][256]{};
+};
+
 struct fetch_object final {
     uint64_t uid{0};
     emscripten_fetch_t *fetch{nullptr};
@@ -93,7 +118,27 @@ struct fetch_object final {
     bool done{false};
 };
 
+struct reverse_request final {
+    uint64_t uid{0};
+    std::string url;
+    std::string method;
+    std::vector<std::pair<std::string, std::string>> headers;
+    std::string body;
+};
+
+struct reverse_response final {
+    uint64_t status{0};
+    uint64_t body_length{0};
+    std::string body;
+    std::vector<std::pair<std::string, std::string>> headers;
+    bool ready{false};
+};
+
 static std::unordered_map<uint64_t, std::unique_ptr<fetch_object>> fetches;
+static std::queue<std::unique_ptr<reverse_request>> reverse_request_queue;
+static std::unordered_map<uint64_t, std::unique_ptr<reverse_request>> pending_reverse_requests;
+static std::unordered_map<uint64_t, std::unique_ptr<reverse_response>> reverse_responses;
+static uint64_t next_reverse_uid = 1;
 
 template <size_t N>
 static void strsvcopy(char (&dest)[N], std::string_view sv) {
@@ -109,6 +154,140 @@ static void on_fetch_success(emscripten_fetch_t *fetch) {
 static void on_fetch_error(emscripten_fetch_t *fetch) {
     fetch_object *o = reinterpret_cast<fetch_object*>(fetch->userData);
     o->done = true;
+}
+
+// Copy request body from JavaScript temporary buffer to C++ memory
+EM_JS(void, js_copy_body_data, (char* dest, uint32_t len, uint32_t js_body_ref), {
+    if (len > 0 && dest && Module._tempBodyData) {
+        const bodyData = Module._tempBodyData;
+        if (bodyData && bodyData.length >= len) {
+            HEAPU8.set(bodyData.subarray(0, len), dest);
+        }
+        Module._tempBodyData = null;
+    }
+});
+
+// Create JavaScript Response object and store in pending map for polling
+EM_JS(void, js_create_response, (uint64_t uid, int status, const char* body_ptr, uint32_t body_len, const char* headers_json), {
+    if (!Module._pendingResponses) {
+        Module._pendingResponses = new Map();
+    }
+
+    let bodyData = null;
+    if (body_len > 0 && body_ptr) {
+        bodyData = new Uint8Array(HEAPU8.buffer, body_ptr, body_len).slice();
+    }
+
+    const headers = new Headers();
+    if (headers_json) {
+        const headersStr = UTF8ToString(headers_json);
+        const lines = headersStr.split('\n');
+        for (const line of lines) {
+            const colonPos = line.indexOf(':');
+            if (colonPos > 0) {
+                const key = line.substring(0, colonPos).trim();
+                const value = line.substring(colonPos + 1).trim();
+                if (key) {
+                    headers.append(key, value);
+                }
+            }
+        }
+    }
+
+    Module._pendingResponses.set(Number(uid), {
+        status: status,
+        body: bodyData,
+        headers: headers,
+        ready: true
+    });
+});
+
+// Parse "Key: Value\nKey: Value" format into header vector
+static void parse_headers(const char* headers_json, std::vector<std::pair<std::string, std::string>>& headers) {
+    if (!headers_json) return;
+
+    std::istringstream iss(headers_json);
+    std::string line;
+    while (std::getline(iss, line)) {
+        size_t colon_pos = line.find(':');
+        if (colon_pos != std::string::npos) {
+            std::string key = line.substr(0, colon_pos);
+            std::string value = line.substr(colon_pos + 1);
+            while (!key.empty() && (key[0] == ' ' || key[0] == '\t')) key.erase(0, 1);
+            while (!key.empty() && (key[key.length()-1] == ' ' || key[key.length()-1] == '\t')) key.erase(key.length()-1);
+            while (!value.empty() && (value[0] == ' ' || value[0] == '\t')) value.erase(0, 1);
+            while (!value.empty() && (value[value.length()-1] == ' ' || value[value.length()-1] == '\t')) value.erase(value.length()-1);
+            if (!key.empty()) {
+                headers.emplace_back(key, value);
+            }
+        }
+    }
+}
+
+extern "C" {
+    EMSCRIPTEN_KEEPALIVE
+    void cancel_reverse_request(uint64_t uid) {
+        pending_reverse_requests.erase(uid);
+        reverse_responses.erase(uid);
+
+        // Remove from queue (rebuild queue without this uid)
+        std::queue<std::unique_ptr<reverse_request>> new_queue;
+        while (!reverse_request_queue.empty()) {
+            auto req = std::move(reverse_request_queue.front());
+            reverse_request_queue.pop();
+            if (req->uid != uid) {
+                new_queue.push(std::move(req));
+            }
+        }
+        reverse_request_queue = std::move(new_queue);
+    }
+
+    // Queue reverse proxy request from JavaScript (returns unique id for polling)
+    EMSCRIPTEN_KEEPALIVE
+    uint64_t vmFetch(const char* url, const char* method, const char* headers_json, uint32_t body_len) {
+        auto req = std::make_unique<reverse_request>();
+        req->uid = next_reverse_uid++;
+        req->url = url ? url : "";
+        req->method = method ? method : "GET";
+
+        if (body_len > 0) {
+            req->body.resize(body_len);
+            js_copy_body_data(req->body.data(), body_len, 0);
+        }
+
+        parse_headers(headers_json, req->headers);
+
+        uint64_t uid = req->uid;
+        reverse_request_queue.push(std::move(req));
+        return uid;
+    }
+
+    // Check if response ready and transfer to JavaScript (returns 1 if ready, 0 if not)
+    EMSCRIPTEN_KEEPALIVE
+    int prepare_reverse_response(uint64_t uid) {
+        auto it = reverse_responses.find(uid);
+        if (it == reverse_responses.end() || !it->second->ready) {
+            return 0;
+        }
+
+        const auto& resp = it->second;
+
+        std::string headers_str;
+        for (const auto& [key, value] : resp->headers) {
+            headers_str += key + ": " + value + "\n";
+        }
+
+        js_create_response(
+            uid,
+            static_cast<int>(resp->status),
+            resp->body.empty() ? nullptr : resp->body.data(),
+            static_cast<uint32_t>(resp->body.length()),
+            headers_str.empty() ? nullptr : headers_str.c_str()
+        );
+
+        reverse_responses.erase(it);
+        return 1;
+    }
 }
 
 bool handle_softyield(cm_machine *machine) {
@@ -242,6 +421,130 @@ bool handle_softyield(cm_machine *machine) {
             // Free
             emscripten_fetch_close(fetch);
             fetches.erase(it);
+            break;
+        }
+        case yield_type::POLL_REVERSE_REQUEST: {
+            // Check if there's a pending reverse request
+            if (reverse_request_queue.empty()) {
+                // No request available, return empty request
+                reverse_mmio_req empty_req{};
+                if (cm_write_virtual_memory(machine, vaddr, (uint8_t*)(&empty_req), sizeof(empty_req)) != 0) {
+                    printf("failed to write virtual memory: %s\n", cm_get_last_error_message());
+                    return false;
+                }
+                return true;
+            }
+
+            // Get the next request from queue
+            auto req = std::move(reverse_request_queue.front());
+            reverse_request_queue.pop();
+
+            // Convert to MMIO format (similar to fill_mmio_req in forward proxy)
+            reverse_mmio_req mmio_req{};
+            mmio_req.uid = req->uid;
+            strsvcopy(mmio_req.url, req->url);
+            strsvcopy(mmio_req.method, req->method);
+            mmio_req.headers_count = 0;
+            for (const auto& header : req->headers) {
+                if (mmio_req.headers_count >= 64) {
+                    break;
+                }
+                strsvcopy(mmio_req.headers[mmio_req.headers_count][0], header.first);
+                strsvcopy(mmio_req.headers[mmio_req.headers_count][1], header.second);
+                mmio_req.headers_count++;
+            }
+            // Store body length (body will be retrieved separately via POLL_REVERSE_REQUEST_BODY)
+            mmio_req.body_length = req->body.length();
+            mmio_req.body_vaddr = 0; // Body will be written to VM memory in separate call
+
+            // Write request to VM memory
+            if (cm_write_virtual_memory(machine, vaddr, (uint8_t*)(&mmio_req), sizeof(mmio_req)) != 0) {
+                printf("failed to write virtual memory: %s\n", cm_get_last_error_message());
+                return false;
+            }
+
+            // Store the request for body retrieval and response callback
+            pending_reverse_requests[req->uid] = std::move(req);
+            break;
+        }
+        case yield_type::POLL_REVERSE_REQUEST_BODY: {
+            // Retrieve request and write body to VM memory
+            auto it = pending_reverse_requests.find(uid);
+            if (it == pending_reverse_requests.end()) {
+                printf("failed to retrieve reverse request\n");
+                return true;
+            }
+            auto& req = it->second;
+
+            // Write body to VM memory at the specified address
+            if (req->body.length() > 0) {
+                if (cm_write_virtual_memory(machine, vaddr, reinterpret_cast<const uint8_t*>(req->body.data()), req->body.length()) != 0) {
+                    printf("failed to write virtual memory: %s\n", cm_get_last_error_message());
+                    return false;
+                }
+            }
+            break;
+        }
+        case yield_type::SEND_REVERSE_RESPONSE: {
+            // Read response headers from VM (similar to POLL_RESPONSE in forward proxy)
+            reverse_mmio_res mmio_res;
+            if (cm_read_virtual_memory(machine, vaddr, (uint8_t*)(&mmio_res), sizeof(mmio_res)) != 0) {
+                printf("failed to read virtual memory: %s\n", cm_get_last_error_message());
+                return false;
+            }
+
+            // Find the pending request using uid from response
+            uint64_t request_uid = mmio_res.uid;
+            auto it = pending_reverse_requests.find(request_uid);
+            if (it == pending_reverse_requests.end()) {
+                printf("failed to find pending reverse request\n");
+                return true;
+            }
+
+            // Create response object and store headers
+            auto resp = std::make_unique<reverse_response>();
+            resp->status = mmio_res.status;
+            resp->body_length = mmio_res.body_total_length;
+            resp->headers.clear();
+            for (uint64_t i = 0; i < mmio_res.headers_count; ++i) {
+                resp->headers.emplace_back(std::string(mmio_res.headers[i][0]), std::string(mmio_res.headers[i][1]));
+            }
+
+            // If no body, mark as ready and clean up
+            if (mmio_res.body_total_length == 0) {
+                resp->ready = true;
+                reverse_responses[request_uid] = std::move(resp);
+                pending_reverse_requests.erase(it);
+            } else {
+                // Store response for body retrieval
+                reverse_responses[request_uid] = std::move(resp);
+            }
+            break;
+        }
+        case yield_type::SEND_REVERSE_RESPONSE_BODY: {
+            // Retrieve response and write body (similar to POLL_RESPONSE_BODY in forward proxy)
+            auto it = reverse_responses.find(uid);
+            if (it == reverse_responses.end()) {
+                printf("failed to retrieve reverse response\n");
+                return true;
+            }
+            auto& resp = it->second;
+
+            // Read body from VM memory
+            if (resp->body_length > 0) {
+                resp->body.resize(resp->body_length);
+                if (cm_read_virtual_memory(machine, vaddr, reinterpret_cast<uint8_t*>(resp->body.data()), resp->body_length) != 0) {
+                    printf("failed to read virtual memory: %s\n", cm_get_last_error_message());
+                    return false;
+                }
+            }
+
+            // Mark as ready and clean up pending request
+            resp->ready = true;
+            auto req_it = pending_reverse_requests.find(uid);
+            if (req_it != pending_reverse_requests.end()) {
+                pending_reverse_requests.erase(req_it);
+            }
             break;
         }
         default:
