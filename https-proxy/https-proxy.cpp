@@ -820,7 +820,10 @@ int main(int argc, char *argv[]) {
 
     // Set basic SSL context options
     ctx.set_options(boost::asio::ssl::context::default_workarounds | boost::asio::ssl::context::no_sslv2 |
-        boost::asio::ssl::context::single_dh_use);
+        boost::asio::ssl::context::no_sslv3 | boost::asio::ssl::context::single_dh_use);
+
+    // Force most efficient TLS 1.2 ciphers for VM (ChaCha20 + AES-128 only)
+    SSL_CTX_set_cipher_list(ctx.native_handle(), "ECDHE-RSA-CHACHA20-POLY1305:AES128-GCM-SHA256:AES128-SHA256");
 
     // Create and launch DNS servers on port 53 (both UDP and TCP)
     std::make_shared<dns_udp_server>(ioc, udp::endpoint{address, 53}, response_ip)->run();
