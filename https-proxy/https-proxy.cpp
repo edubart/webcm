@@ -21,6 +21,7 @@
 #include <boost/asio/ssl.hpp>
 #include <boost/asio/strand.hpp>
 #include <boost/asio/write.hpp>
+#include <boost/asio/ip/udp.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 #include <boost/beast/http/field.hpp>
@@ -31,7 +32,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <exception>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -39,6 +39,20 @@
 #include <thread>
 #include <vector>
 #include <openssl/ssl.h>
+
+// Provide boost::throw_exception implementation for -fno-exceptions build
+#ifdef BOOST_NO_EXCEPTIONS
+namespace boost {
+[[noreturn]] void throw_exception(std::exception const& e) {
+    std::cerr << "Fatal error: " << e.what() << "\n";
+    std::abort();
+}
+[[noreturn]] void throw_exception(std::exception const& e, boost::source_location const& /*loc*/) {
+    std::cerr << "Fatal error: " << e.what() << "\n";
+    std::abort();
+}
+} // namespace boost
+#endif
 
 namespace beast = boost::beast;   // from <boost/beast.hpp>
 namespace http = beast::http;     // from <boost/beast/http.hpp>
@@ -765,7 +779,7 @@ private:
 
 //------------------------------------------------------------------------------
 
-int main(int argc, char *argv[]) try {
+int main(int argc, char *argv[]) {
     // Check command line arguments.
     if (argc != 4) {
         std::cerr << "Usage: https-proxy <address> <port1> <port2>\n"
@@ -825,6 +839,4 @@ int main(int argc, char *argv[]) try {
     ioc.run();
 
     return EXIT_SUCCESS;
-} catch (const std::exception &e) {
-    std::cerr << "main() exception: " << e.what() << "\n";
 }
