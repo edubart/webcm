@@ -16,18 +16,22 @@
 #include "cert_store.hpp"
 
 #include <boost/asio/dispatch.hpp>
+#include <boost/asio/ip/udp.hpp>
+#include <boost/asio/read.hpp>
 #include <boost/asio/ssl.hpp>
 #include <boost/asio/strand.hpp>
+#include <boost/asio/write.hpp>
+#include <boost/asio/ip/udp.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 #include <boost/beast/http/field.hpp>
 #include <boost/beast/version.hpp>
 #include <boost/config.hpp>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <exception>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -38,11 +42,26 @@
 #include <functional>
 #include <openssl/ssl.h>
 
+// Provide boost::throw_exception implementation for -fno-exceptions build
+#ifdef BOOST_NO_EXCEPTIONS
+namespace boost {
+[[noreturn]] void throw_exception(std::exception const& e) {
+    std::cerr << "Fatal error: " << e.what() << "\n";
+    std::abort();
+}
+[[noreturn]] void throw_exception(std::exception const& e, boost::source_location const& /*loc*/) {
+    std::cerr << "Fatal error: " << e.what() << "\n";
+    std::abort();
+}
+} // namespace boost
+#endif
+
 namespace beast = boost::beast;   // from <boost/beast.hpp>
 namespace http = beast::http;     // from <boost/beast/http.hpp>
 namespace net = boost::asio;      // from <boost/asio.hpp>
 namespace ssl = boost::asio::ssl; // from <boost/asio/ssl.hpp>
 using tcp = boost::asio::ip::tcp; // from <boost/asio/ip/tcp.hpp>
+using udp = boost::asio::ip::udp; // from <boost/asio/ip/udp.hpp>
 
 enum class yield_type : uint64_t {
     INVALID = 0,
@@ -553,6 +572,278 @@ public:
 };
 
 //------------------------------------------------------------------------------
+// DNS Server Implementation
+//------------------------------------------------------------------------------
+
+// Helper function to build DNS response (shared by UDP and TCP)
+static std::vector<uint8_t> build_dns_response(const uint8_t* query_buffer, std::size_t length, uint32_t response_ip) {
+    // Parse DNS header
+    uint16_t flags = (query_buffer[2] << 8) | query_buffer[3];
+    uint16_t questions = (query_buffer[4] << 8) | query_buffer[5];
+
+    // Only handle standard queries (opcode 0) with at least one question
+    if ((flags & 0x7800) != 0 || questions == 0) {
+        return {};
+    }
+
+    // Build response
+    std::vector<uint8_t> response;
+    response.reserve(512);
+
+    // Copy header and set response flags
+    response.insert(response.end(), query_buffer, query_buffer + 12);
+    // Flags: response (QR=1), recursion desired + available, no error
+    response[2] = 0x81;
+    response[3] = 0x80;
+    // Answer count will be set later after we know how many answers we added
+    response[6] = 0x00;
+    response[7] = 0x00;
+    // Authority count = 0
+    response[8] = 0x00;
+    response[9] = 0x00;
+    // Additional count = 0 (we don't support EDNS0 or other additional records)
+    response[10] = 0x00;
+    response[11] = 0x00;
+
+    // Copy question section and add answers
+    uint16_t answer_count = 0;
+    size_t pos = 12;
+    for (uint16_t q = 0; q < questions && pos < length; ++q) {
+        size_t question_start = pos;
+        size_t response_question_start = response.size(); // Track position in response
+
+        // Skip domain name labels
+        while (pos < length && query_buffer[pos] != 0) {
+            uint8_t label_len = query_buffer[pos];
+            if (label_len >= 192) { // Compression pointer
+                pos += 2;
+                break;
+            }
+            pos += label_len + 1;
+            if (pos >= length) return {};
+        }
+        if (pos < length && query_buffer[pos] == 0) {
+            pos++; // Skip null terminator
+        }
+
+        // Get query type and class
+        if (pos + 4 > length) return {};
+        uint16_t qtype = (query_buffer[pos] << 8) | query_buffer[pos + 1];
+        uint16_t qclass = (query_buffer[pos + 2] << 8) | query_buffer[pos + 3];
+        pos += 4;
+
+        // Copy question to response
+        response.insert(response.end(), query_buffer + question_start, query_buffer + pos);
+
+        // Add answer if it's an A record query (type 1, class 1 = IN)
+        if (qtype == 1 && qclass == 1) {
+            // Name pointer to question (compression) - use position in response, not request
+            response.push_back(0xc0);
+            response.push_back(response_question_start);
+
+            // Type A (1)
+            response.push_back(0x00);
+            response.push_back(0x01);
+
+            // Class IN (1)
+            response.push_back(0x00);
+            response.push_back(0x01);
+
+            // TTL (60 seconds)
+            response.push_back(0x00);
+            response.push_back(0x00);
+            response.push_back(0x00);
+            response.push_back(0x3c);
+
+            // RDATA length (4 bytes for IPv4)
+            response.push_back(0x00);
+            response.push_back(0x04);
+
+            // IP address (network byte order)
+            response.push_back((response_ip >> 24) & 0xff);
+            response.push_back((response_ip >> 16) & 0xff);
+            response.push_back((response_ip >> 8) & 0xff);
+            response.push_back(response_ip & 0xff);
+
+            answer_count++;
+        }
+    }
+
+    // Update answer count in header
+    response[6] = (answer_count >> 8) & 0xff;
+    response[7] = answer_count & 0xff;
+
+    return response;
+}
+
+// UDP DNS server that responds to all A record queries with a fixed IP
+class dns_udp_server : public std::enable_shared_from_this<dns_udp_server> {
+    udp::socket socket_;
+    udp::endpoint remote_endpoint_;
+    std::array<uint8_t, 512> recv_buffer_{};
+    uint32_t response_ip_;
+
+public:
+    dns_udp_server(net::io_context &ioc, const udp::endpoint &endpoint, uint32_t response_ip) :
+        socket_(ioc, endpoint),
+        response_ip_(response_ip) {}
+
+    void run() {
+        do_receive();
+    }
+
+private:
+    void do_receive() {
+        socket_.async_receive_from(net::buffer(recv_buffer_), remote_endpoint_,
+            [self = shared_from_this()](beast::error_code ec, std::size_t bytes_received) {
+                if (!ec && bytes_received >= 12) {
+                    self->handle_query(bytes_received);
+                }
+                self->do_receive();
+            });
+    }
+
+    void handle_query(std::size_t length) {
+        auto response = build_dns_response(recv_buffer_.data(), length, response_ip_);
+        if (response.empty()) {
+            return;
+        }
+
+        // Send response
+        socket_.async_send_to(net::buffer(response), remote_endpoint_,
+            [](beast::error_code /*ec*/, std::size_t /*bytes_sent*/) {
+                // Fire and forget
+            });
+    }
+};
+
+// TCP DNS connection handler
+class dns_tcp_session : public std::enable_shared_from_this<dns_tcp_session> {
+    tcp::socket socket_;
+    uint32_t response_ip_;
+    std::array<uint8_t, 514> recv_buffer_{}; // 2 bytes length + 512 bytes message
+
+public:
+    dns_tcp_session(tcp::socket socket, uint32_t response_ip) :
+        socket_(std::move(socket)),
+        response_ip_(response_ip) {}
+
+    void run() {
+        do_read_length();
+    }
+
+private:
+    void do_read_length() {
+        auto self = shared_from_this();
+        // Read 2-byte length prefix
+        net::async_read(socket_, net::buffer(recv_buffer_.data(), 2),
+            [self](beast::error_code ec, std::size_t /*bytes_transferred*/) {
+                if (ec) {
+                    return; // Connection closed or error
+                }
+
+                uint16_t msg_length = (self->recv_buffer_[0] << 8) | self->recv_buffer_[1];
+                if (msg_length > 512) {
+                    return; // Invalid length
+                }
+
+                self->do_read_message(msg_length);
+            });
+    }
+
+    void do_read_message(uint16_t length) {
+        auto self = shared_from_this();
+        // Read the DNS message
+        net::async_read(socket_, net::buffer(recv_buffer_.data() + 2, length),
+            [self, length](beast::error_code ec, std::size_t /*bytes_transferred*/) {
+                if (ec) {
+                    return;
+                }
+
+                self->handle_query(length);
+            });
+    }
+
+    void handle_query(uint16_t length) {
+        auto response = build_dns_response(recv_buffer_.data() + 2, length, response_ip_);
+        if (response.empty()) {
+            return;
+        }
+
+        // Prepend 2-byte length
+        std::vector<uint8_t> tcp_response;
+        tcp_response.reserve(response.size() + 2);
+        uint16_t response_length = response.size();
+        tcp_response.push_back((response_length >> 8) & 0xff);
+        tcp_response.push_back(response_length & 0xff);
+        tcp_response.insert(tcp_response.end(), response.begin(), response.end());
+
+        // Send response
+        auto self = shared_from_this();
+        net::async_write(socket_, net::buffer(tcp_response),
+            [self](beast::error_code /*ec*/, std::size_t /*bytes_transferred*/) {
+                // Close connection after response
+                beast::error_code ec;
+                self->socket_.shutdown(tcp::socket::shutdown_both, ec);
+            });
+    }
+};
+
+// TCP DNS server
+class dns_tcp_server : public std::enable_shared_from_this<dns_tcp_server> {
+    net::io_context &ioc_; // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
+    tcp::acceptor acceptor_;
+    uint32_t response_ip_;
+
+public:
+    dns_tcp_server(net::io_context &ioc, const tcp::endpoint &endpoint, uint32_t response_ip) :
+        ioc_(ioc),
+        acceptor_(net::make_strand(ioc)),
+        response_ip_(response_ip) {
+        beast::error_code ec;
+
+        acceptor_.open(endpoint.protocol(), ec);
+        if (ec) {
+            fail(ec, "dns_tcp open");
+            return;
+        }
+
+        acceptor_.set_option(net::socket_base::reuse_address(true), ec);
+        if (ec) {
+            fail(ec, "dns_tcp set_option");
+            return;
+        }
+
+        acceptor_.bind(endpoint, ec);
+        if (ec) {
+            fail(ec, "dns_tcp bind");
+            return;
+        }
+
+        acceptor_.listen(net::socket_base::max_listen_connections, ec);
+        if (ec) {
+            fail(ec, "dns_tcp listen");
+            return;
+        }
+    }
+
+    void run() {
+        do_accept();
+    }
+
+private:
+    void do_accept() {
+        acceptor_.async_accept(net::make_strand(ioc_),
+            [self = shared_from_this()](beast::error_code ec, tcp::socket socket) {
+                if (!ec) {
+                    std::make_shared<dns_tcp_session>(std::move(socket), self->response_ip_)->run();
+                }
+                self->do_accept();
+            });
+    }
+};
+
+//------------------------------------------------------------------------------
 
 // SNI callback to capture hostname and inject certificate
 static int sni_callback(SSL* ssl, int* /*ad*/, void* /*arg*/) {
@@ -677,18 +968,28 @@ private:
 
 //------------------------------------------------------------------------------
 
-int main(int argc, char *argv[]) try {
+int main(int argc, char *argv[]) {
     // Check command line arguments.
     if (argc != 4) {
         std::cerr << "Usage: https-proxy <address> <port1> <port2>\n"
                   << "Example:\n"
-                  << "    https-proxy 127.0.0.1 80 443\n";
+                  << "    https-proxy 127.254.254.254 80 443\n"
+                  << "This will also start a DNS server on port 53 that resolves all domains to <address>\n";
         return EXIT_FAILURE;
     }
     auto const address = net::ip::make_address(argv[1]);
     auto const port1 = static_cast<uint16_t>(std::strtol(argv[2], nullptr, 10));
     auto const port2 = static_cast<uint16_t>(std::strtol(argv[3], nullptr, 10));
     auto const threads = 1;
+
+    // Convert IP address to uint32 for DNS responses (network byte order)
+    uint32_t response_ip;
+    if (address.is_v4()) {
+        response_ip = address.to_v4().to_uint();
+    } else {
+        std::cerr << "Only IPv4 addresses are supported\n";
+        return EXIT_FAILURE;
+    }
 
     // The io_context is required for all I/O
     net::io_context ioc{threads};
@@ -710,7 +1011,11 @@ int main(int argc, char *argv[]) try {
     ctx.set_options(boost::asio::ssl::context::default_workarounds | boost::asio::ssl::context::no_sslv2 |
         boost::asio::ssl::context::single_dh_use);
 
-    // Create and launch a listening port
+    // Create and launch DNS servers on port 53 (both UDP and TCP)
+    std::make_shared<dns_udp_server>(ioc, udp::endpoint{address, 53}, response_ip)->run();
+    std::make_shared<dns_tcp_server>(ioc, tcp::endpoint{address, 53}, response_ip)->run();
+
+    // Create and launch HTTP/HTTPS listening ports
     std::make_shared<listener>(ioc, ctx, tcp::endpoint{address, port1})->run();
     std::make_shared<listener>(ioc, ctx, tcp::endpoint{address, port2})->run();
 
@@ -734,6 +1039,4 @@ int main(int argc, char *argv[]) try {
     ioc.run();
 
     return EXIT_SUCCESS;
-} catch (const std::exception &e) {
-    std::cerr << "main() exception: " << e.what() << "\n";
 }

@@ -7,3 +7,6 @@ emscripten-pty.js
 gh-pages
 *.wasm
 *.mjs
+.cache
+.buildx-cache
+.webcm-builder
