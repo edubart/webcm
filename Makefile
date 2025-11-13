@@ -10,39 +10,37 @@ EMCC_CFLAGS=-Oz -g0 -std=gnu++23 \
    	-sTOTAL_MEMORY=768MB \
    	-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8
 PIGZ_LEVEL ?= 11
-SKEL_FILES=$(shell find skel -type f)
-SRC_FILES=$(shell find https-proxy -type f -name '*.cpp' -o -name '*.hpp' -o -name Makefile)
+GUEST_SKEL_FILES=$(shell find skel -type f)
+GUEST_SRC_FILES=$(shell find https-proxy -type f -name '*.cpp' -o -name '*.hpp' -o -name Makefile)
+DOCKER_HOST_TAG=webcm/builder
+DOCKER_HOST_RUN_FLAGS=
+DOCKER_HOST_RUN=docker run --platform=linux/amd64 --volume=.:/mnt --workdir=/mnt --user=$(shell id -u):$(shell id -g) --env=HOME=/tmp $(DOCKER_HOST_RUN_FLAGS) --rm $(DOCKER_HOST_TAG)
 
-all: builder rootfs.ext2 webcm.mjs
+all: rootfs.ext2 webcm.mjs ## Build everything
 
-test: # Test
-	emrun index.html
-
-builder: builder.Dockerfile ## Build WASM cross compiler docker image
-ifeq ($(IS_WASM_TOOLCHAIN),true)
-	@echo "Skipping builder target (already inside builder container)"
-else
-	docker build --tag webcm/builder --file $< --progress plain .
+.webcm-builder: builder.Dockerfile ## Build WASM cross compiler docker image
+ifneq ($(IS_WASM_TOOLCHAIN),true)
+	docker build --platform=linux/amd64 --tag $(DOCKER_HOST_TAG) --file $< --progress plain .
+	touch $@
 endif
 
-webcm.wasm webcm.mjs: webcm.cpp rootfs.ext2.zz linux.bin.zz emscripten-pty.js
+webcm.wasm webcm.mjs: DOCKER_HOST_RUN_FLAGS=--env=EM_CACHE=/mnt/.cache --env=PIGZ_LEVEL=$(PIGZ_LEVEL)
+webcm.wasm webcm.mjs: webcm.cpp rootfs.ext2.zz linux.bin.zz emscripten-pty.js .cache
 ifeq ($(IS_WASM_TOOLCHAIN),true)
 	em++ webcm.cpp -o webcm.mjs $(EMCC_CFLAGS)
 else
-	@mkdir -p .cache
-	docker run --volume=.:/mnt --workdir=/mnt --user=$(shell id -u):$(shell id -g) --env=HOME=/tmp --env=EM_CACHE=/mnt/.cache --env=PIGZ_LEVEL=$(PIGZ_LEVEL) --rm -it webcm/builder make webcm.mjs
+	$(DOCKER_HOST_RUN) make webcm.mjs
 endif
 
-gh-pages: index.html webcm.mjs webcm.wasm webcm.mjs favicon.svg
+gh-pages: index.html webcm.mjs webcm.wasm favicon.svg ## Build github pages directory
 	mkdir -p $@
 	cp $^ $@/
 
-rootfs.ext2: rootfs.tar builder
+rootfs.ext2: rootfs.tar .webcm-builder ## Build rootfs.ext2
 ifeq ($(IS_WASM_TOOLCHAIN),true)
 	@test -f $@ || (echo "Error: $@ not found. This should be built on the host." && exit 1)
 else
-	docker run --volume=.:/mnt --workdir=/mnt --user=$(shell id -u):$(shell id -g) --env=HOME=/tmp --rm webcm/builder \
-	    xgenext2fs \
+	$(DOCKER_HOST_RUN) xgenext2fs \
 	    --faketime \
 	    --allow-holes \
 	    --size-in-blocks 98304 \
@@ -52,62 +50,56 @@ else
 	    --tarball $< $@
 endif
 
-rootfs.tar: rootfs.Dockerfile $(SKEL_FILES) $(SRC_FILES)
+rootfs.tar: rootfs.Dockerfile .buildx-cache $(GUEST_SKEL_FILES) $(GUEST_SRC_FILES) ## Build rootfs.tar
 ifeq ($(IS_WASM_TOOLCHAIN),true)
 	@test -f $@ || (echo "Error: $@ not found. This should be built on the host." && exit 1)
 else
-	@mkdir -p .buildx-cache
-	docker buildx build --progress plain --cache-from type=local,src=.buildx-cache --output type=tar,dest=$@ --file rootfs.Dockerfile .
+	docker buildx build --platform=linux/riscv64 --progress plain --cache-from type=local,src=.buildx-cache --output type=tar,dest=$@ --file rootfs.Dockerfile .
 endif
 
-emscripten-pty.js: builder
+emscripten-pty.js: .webcm-builder ## Download emscripten-pty.js dependency
 ifeq ($(IS_WASM_TOOLCHAIN),true)
 	@test -f $@ || (echo "Error: $@ not found. This should be built on the host." && exit 1)
 else
-	@if [ ! -f $@ ]; then \
-		docker run --volume=.:/mnt --workdir=/mnt --user=$(shell id -u):$(shell id -g) --env=HOME=/tmp --rm webcm/builder \
-		    wget -O emscripten-pty.js https://raw.githubusercontent.com/mame/xterm-pty/f284cab414d3e20f27a2f9298540b559878558db/emscripten-pty.js; \
-	else \
-		echo "$@ already exists, skipping download"; \
-	fi
+	$(DOCKER_HOST_RUN) wget -O emscripten-pty.js https://raw.githubusercontent.com/mame/xterm-pty/f284cab414d3e20f27a2f9298540b559878558db/emscripten-pty.js
+	touch $@
 endif
 
-linux.bin: builder ## Download linux.bin
+linux.bin: .webcm-builder ## Download linux.bin dependency
 ifeq ($(IS_WASM_TOOLCHAIN),true)
 	@test -f $@ || (echo "Error: $@ not found. This should be built on the host." && exit 1)
 else
-	@if [ ! -f $@ ]; then \
-		docker run --volume=.:/mnt --workdir=/mnt --user=$(shell id -u):$(shell id -g) --env=HOME=/tmp --rm webcm/builder \
-		    wget -O linux.bin https://github.com/cartesi/machine-linux-image/releases/download/v0.20.0/linux-6.5.13-ctsi-1-v0.20.0.bin; \
-	else \
-		echo "$@ already exists, skipping download"; \
-	fi
+	$(DOCKER_HOST_RUN) wget -O linux.bin https://github.com/cartesi/machine-linux-image/releases/download/v0.20.0/linux-6.5.13-ctsi-1-v0.20.0.bin
+	touch $@
 endif
 
-%.zz: % builder
+%.zz: % .webcm-builder
 ifeq ($(IS_WASM_TOOLCHAIN),true)
 	@test -f $@ || (echo "Error: $@ not found. This should be built on the host." && exit 1)
 else
-	docker run --volume=.:/mnt --workdir=/mnt --user=$(shell id -u):$(shell id -g) --env=HOME=/tmp --rm webcm/builder \
-	    sh -c "cat $< | pigz -cz -$(PIGZ_LEVEL) > $@"
+	$(DOCKER_HOST_RUN) sh -c "cat $< | pigz -cz -$(PIGZ_LEVEL) > $@"
 endif
+
+.buildx-cache .cache: ## Create cache directories
+	mkdir -p $@
 
 clean: ## Remove built files
-	rm -f webcm.mjs webcm.wasm rootfs.tar rootfs.ext2 rootfs.ext2.zz linux.bin.zz
+	rm -rf webcm.mjs webcm.wasm rootfs.tar rootfs.ext2 rootfs.ext2.zz linux.bin.zz
 
-distclean: clean ## Remove built files and downloaded files
-	rm -f linux.bin emscripten-pty.js
+distclean: clean ## Remove built files, downloaded files and cached files
+	rm -rf linux.bin emscripten-pty.js .cache .buildx-cache .webcm-builder
 
-shell: rootfs.ext2 linux.bin # For debugging
-	/usr/bin/cartesi-machine \
-		--ram-image=linux.bin \
-		--flash-drive=label:root,filename:rootfs.ext2 \
+shell: DOCKER_HOST_RUN_FLAGS=-it
+shell: rootfs.ext2 linux.bin ## Spawn a cartesi machine shell using the built rootfs
+	$(DOCKER_HOST_RUN) cartesi-machine \
+		--ram-image=/mnt/linux.bin \
+		--flash-drive=label:root,filename:/mnt/rootfs.ext2 \
 		--no-init-splash \
 		--network \
 		--user=root \
 		-it "exec ash -l"
 
-serve: ## Serve a web server
+serve: webcm.mjs webcm.wasm ## Serve a web server
 	python -m http.server 8080
 
 help: ## Show this help
