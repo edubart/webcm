@@ -86,6 +86,7 @@ RUN apk add \
     git \
     cmatrix \
     curl wget \
+    darkhttpd \
     libatomic
 
 # Remove unneeded files to shrink image size
